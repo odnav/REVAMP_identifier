@@ -1,0 +1,14 @@
+[Unit]
+Description=Discord Tag Bot
+After=network.target
+
+[Service]
+Environment=NODE_ENV=production
+WorkingDirectory=/opt/discord-tag-bot
+ExecStart=/usr/bin/node index.js
+Restart=always
+User=botuser
+Group=botuser
+
+[Install]
+WantedBy=multi-user.target
