@@ -4,15 +4,13 @@ import { REST, Routes, SlashCommandBuilder } from 'discord.js';
 const commands = [
   new SlashCommandBuilder()
     .setName('verificar')
-    .setDescription('Verifica quem não tem a tag aplicada e permite aplicar.'),
+    .setDescription('Verifica quem não tem tag aplicada (distingue geríveis e não geríveis).'),
 
   new SlashCommandBuilder()
     .setName('reset')
-    .setDescription('Restaura o nome original do Discord (limpa nickname).')
+    .setDescription('Limpa nickname (volta ao nome original do Discord).')
     .addUserOption(o =>
-      o.setName('user')
-       .setDescription('Utilizador alvo (opcional)')
-       .setRequired(false)
+      o.setName('user').setDescription('Utilizador alvo (opcional)').setRequired(false)
     )
     .addStringOption(o =>
       o.setName('scope')
@@ -26,17 +24,17 @@ const commands = [
     )
     .addBooleanOption(o =>
       o.setName('only_with_prefix')
-       .setDescription('Só quem tem prefixo [N] no nick')
+       .setDescription('Só quem tem prefixo [N]')
        .setRequired(false)
     ),
 
   new SlashCommandBuilder()
     .setName('aplicar')
-    .setDescription('Aplica tags/nicknames apenas a NÃO-staff.'),
+    .setDescription('Aplica tags apenas a NÃO-staff.'),
 
   new SlashCommandBuilder()
     .setName('aplicarstaff')
-    .setDescription('Aplica tags/nicknames apenas a STAFF.'),
+    .setDescription('Aplica tags apenas a STAFF (por segmentos).'),
 
   new SlashCommandBuilder()
     .setName('staff')
@@ -47,13 +45,9 @@ const commands = [
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
-try {
-  await rest.put(
-    Routes.applicationGuildCommands(process.env.DISCORD_CLIENT_ID, process.env.GUILD_ID),
-    { body: commands }
-  );
-  console.log('✓ Comandos registados');
-} catch (e) {
-  console.error('Falha a registar comandos', e);
-  process.exit(1);
-}
+await rest.put(
+  Routes.applicationGuildCommands(process.env.DISCORD_CLIENT_ID, process.env.GUILD_ID),
+  { body: commands }
+);
+
+console.log('✓ Comandos registados');

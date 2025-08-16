@@ -1,13 +1,5 @@
--- Schema e dados para tags permanentes
 CREATE SCHEMA IF NOT EXISTS discord_tags;
 
--- sequência para público (>=100)
-CREATE SEQUENCE IF NOT EXISTS discord_tags.public_seq START 100;
-
--- sequência para staff (<100)
-CREATE SEQUENCE IF NOT EXISTS discord_tags.staff_seq START 1;
-
--- tabela principal
 CREATE TABLE IF NOT EXISTS discord_tags.user_tags (
   discord_id   TEXT PRIMARY KEY,
   tag_number   INTEGER NOT NULL,
@@ -16,7 +8,19 @@ CREATE TABLE IF NOT EXISTS discord_tags.user_tags (
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- função e trigger para updated_at
+-- evitar números repetidos
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM   pg_constraint
+    WHERE  conname = 'uq_user_tags_tag'
+  ) THEN
+    ALTER TABLE discord_tags.user_tags
+      ADD CONSTRAINT uq_user_tags_tag UNIQUE (tag_number);
+  END IF;
+END $$;
+
 CREATE OR REPLACE FUNCTION discord_tags.touch_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
