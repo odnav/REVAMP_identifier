@@ -1,5 +1,5 @@
-// index.js — Revamp Identifier (com tags, staff segmentos, corrigir, comunicado interativo)
-// Requisitos: ativar no Developer Portal os intents "Server Members" e "Message Content".
+// index.js — REVAMP (admin-only, tags permanentes, segmentos staff, comunicado interativo)
+// Requisitos: ativa no Developer Portal os intents "Server Members" e "Message Content".
 
 import 'dotenv/config';
 import {
@@ -31,7 +31,10 @@ const client = new Client({
 const pool = new Pool();
 const GUILD_ID = process.env.GUILD_ID;
 const BRACKETS_SQUARE = process.env.NICKNAME_PREFIX_BRACKETS !== '0';
+// (opcional) Roles que também contam como administradores
+const ADMIN_ROLE_IDS = (process.env.ADMIN_ROLE_IDS || '').split(',').map(s=>s.trim()).filter(Boolean);
 
+/* ===== Utils ===== */
 function parseRange(s) {
   const m = /^\s*(\d+)\s*-\s*(\d+)\s*$/.exec(String(s || ''));
   if (!m) return null; const a = parseInt(m[1],10), b = parseInt(m[2],10); return a<=b?[a,b]:[b,a];
@@ -57,6 +60,12 @@ function isStaffMember(member){ return member.roles.cache.some(r => ALL_STAFF_RO
 function preferredSegmentFor(member){ return SEGMENTS.find(s => member.roles.cache.has(s.roleId)) || null; }
 async function withConn(fn){ const c = await pool.connect(); try { return await fn(c); } finally { c.release(); } }
 
+// 🔒 Admin check (também aceita roles na variável ADMIN_ROLE_IDS)
+function isAdmin(member){
+  return member?.permissions?.has(PermissionsBitField.Flags.Administrator) ||
+         member?.roles?.cache?.some(r => ADMIN_ROLE_IDS.includes(r.id));
+}
+
 // BBCode simples -> Markdown (para comodidade ao escrever textos)
 function formatInput(t){
   if (!t) return t;
@@ -69,7 +78,8 @@ function formatInput(t){
     .replace(/\[code\](.*?)\[\/code\]/gis, '`$1`');
 }
 function canSendComms(i){
-  return i.memberPermissions.has(PermissionsBitField.Flags.ManageGuild) ||
+  return isAdmin(i.member) ||
+         i.memberPermissions.has(PermissionsBitField.Flags.ManageGuild) ||
          i.memberPermissions.has(PermissionsBitField.Flags.ManageMessages);
 }
 
@@ -209,9 +219,13 @@ client.on(Events.GuildMemberAdd, async (member) => {
 client.on(Events.InteractionCreate, async (i) => {
   if (!i.isChatInputCommand() && !i.isButton() && !i.isChannelSelectMenu() && !i.isModalSubmit()) return;
 
+  // 🔒 Guard global: apenas admins
+  if (i.guild && !isAdmin(i.member)) {
+    return i.reply({ ephemeral: true, content: 'Apenas administradores podem usar estes comandos.' }).catch(()=>{});
+  }
+
   // ----- /verificar
   if (i.isChatInputCommand() && i.commandName === 'verificar') {
-    if (!i.memberPermissions.has(PermissionsBitField.Flags.ManageNicknames)) return i.reply({ ephemeral:true, content:'Precisas de permissão Manage Nicknames.' });
     const guild = await getGuildSafe(i); if (!guild) return i.reply({ ephemeral:true, content:'Config inválida: GUILD_ID.' });
     await ensureOwnerReservedTag(guild);
     const { missingManageable, missingUnmanageable } = await scanGuild(guild);
@@ -277,13 +291,12 @@ client.on(Events.InteractionCreate, async (i) => {
     const member = await guild.members.fetch(user.id).catch(()=>null); if (!member) return i.reply({ ephemeral:true, content:'Utilizador não encontrado.' });
     await member.roles.add(role).catch(()=>{});
     const tag = await ensureStaffTag(member.id, member);
-    if (member.manageable && member.id !== guild.ownerId) await applyNickname(member, tag.tag_number).catch(()=>{});
+    if (member.manageable && member.id !== member.guild.ownerId) await applyNickname(member, tag.tag_number).catch(()=>{});
     return i.reply({ ephemeral:true, content:`Cargo atribuído. Tag: ${makePrefix(tag.tag_number)} (nick pode não mudar se não for gerível).` });
   }
 
   // ----- /corrigir
   if (i.isChatInputCommand() && i.commandName==='corrigir'){
-    if (!i.memberPermissions.has(PermissionsBitField.Flags.ManageNicknames)) return i.reply({ ephemeral:true, content:'Precisas de Manage Nicknames.' });
     await i.deferReply({ ephemeral:true });
     const user = i.options.getUser('user', true); const numero = i.options.getInteger('numero', true); const force = i.options.getBoolean('force') || false;
     const guild = await getGuildSafe(i); if (!guild) return i.editReply('Config inválida (GUILD_ID).');
@@ -302,7 +315,7 @@ client.on(Events.InteractionCreate, async (i) => {
     return i.editReply(`Tag corrigida para ${makePrefix(numero)} — ${nickInfo}`);
   }
 
-  // ----- /comunicado (assistente)
+  // ----- /comunicado (assistente único)
   if (i.isChatInputCommand() && i.commandName==='comunicado'){
     if (!canSendComms(i)) return i.reply({ ephemeral:true, content:'Sem permissão (Manage Guild ou Manage Messages).' });
     commState.set(i.user.id, { guildId:i.guildId, sourceChannelId:i.channelId, step:'choose_type', createdAt:Date.now() });
@@ -358,7 +371,6 @@ client.on(Events.InteractionCreate, async (i) => {
 
   // botão aplicar tudo
   if (i.isButton() && i.customId==='apply_all'){
-    if (!i.memberPermissions.has(PermissionsBitField.Flags.ManageNicknames)) return i.reply({ ephemeral:true, content:'Sem permissão.' });
     await i.deferReply({ ephemeral:true });
     const guild = await getGuildSafe(i); if (!guild) return i.editReply('Config inválida (GUILD_ID).');
     const { missingManageable } = await scanGuild(guild);
@@ -377,10 +389,19 @@ client.on(Events.InteractionCreate, async (i) => {
 
 /* ===== Captura do próximo texto (para /comunicado) ===== */
 client.on(Events.MessageCreate, async (m) => {
-  if (m.author.bot) return; const s = getState(m.author.id); if (!s) return; if (s.guildId !== m.guildId || s.sourceChannelId !== m.channelId) return; if (s.step !== 'await_text') return;
+  if (m.author.bot) return;
+  const s = getState(m.author.id); if (!s) return;
+  if (s.guildId !== m.guildId || s.sourceChannelId !== m.channelId) return;
+  if (s.step !== 'await_text') return;
+  // apenas admins devem conseguir prosseguir (defensivo)
+  const member = await m.guild.members.fetch(m.author.id).catch(()=>null);
+  if (!isAdmin(member)) return;
+
   s.text = formatInput(m.content.trim()); s.step='preview'; s.createdAt=Date.now();
   const embed = new EmbedBuilder().setDescription(s.text).setImage(s.imageUrl).setTimestamp();
-  const rowSelect = new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('comm_pick_channel').setPlaceholder('Escolhe a sala de destino…').addChannelTypes(ChannelType.GuildText));
+  const rowSelect = new ActionRowBuilder().addComponents(
+    new ChannelSelectMenuBuilder().setCustomId('comm_pick_channel').setPlaceholder('Escolhe a sala de destino…').addChannelTypes(ChannelType.GuildText)
+  );
   const rowBtns = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('comm_confirm').setLabel('Enviar').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('comm_cancel').setLabel('Cancelar').setStyle(ButtonStyle.Secondary)
