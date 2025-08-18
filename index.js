@@ -409,4 +409,4 @@ client.on(Events.MessageCreate, async (m) => {
   try{ await m.reply({ content:'Pré-visualização (só tu vês este aviso). Escolhe a sala e clica **Enviar**.', embeds:[embed], components:[rowSelect,rowBtns], allowedMentions:{ parse: [] } }); } catch{}
 });
 
-client.login(process.env.DISCORD_TOKEN);
+client.login(process.env.DISCORD_TOKEN); 

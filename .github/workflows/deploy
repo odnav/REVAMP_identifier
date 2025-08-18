@@ -1,0 +1,63 @@
+name: Deploy REVAMP bot
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-revamp
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Variáveis que vamos enviar para o servidor remoto via SSH
+    env:
+      REPO: ${{ github.repository }}
+      REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+      DEST_DIR: ${{ secrets.DEST_DIR }}
+      SERVICE_NAME: ${{ secrets.SERVICE_NAME }}
+
+    steps:
+      - name: SSH -> pull, deploy & restart
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script_stop: true
+          insecure_ignore_fingerprint: true
+          # Enviar variáveis acima para o shell remoto
+          envs: REPO,REPO_URL,DEST_DIR,SERVICE_NAME
+          script: |
+            set -Eeuo pipefail
+            echo "[Deploy] Repo: $REPO  Dest: $DEST_DIR"
+
+            if [ -z "${DEST_DIR:-}" ]; then
+              echo "DEST_DIR (secret) não definido" >&2; exit 1
+            fi
+
+            # Clonar se não existir, senão fazer fetch + reset
+            if [ ! -d "$DEST_DIR/.git" ]; then
+              mkdir -p "$DEST_DIR"
+              git clone -b main "$REPO_URL.git" "$DEST_DIR"
+            fi
+
+            cd "$DEST_DIR"
+            git fetch --prune
+            git checkout main
+            git reset --hard origin/main
+
+            # Dependências e deploy dos comandos
+            if command -v npm >/dev/null 2>&1; then
+              npm ci --omit=dev || npm install
+              npm run deploy
+            else
+              echo "npm não encontrado no servidor. Instala Node.js 18+" >&2; exit 1
+            fi
+
+            # Reiniciar o serviço (requer sudo sem password para este comando)
+            sudo systemctl restart "${SERVICE_NAME:-revamp-identifier}"
+            sudo systemctl status "${SERVICE_NAME:-revamp-identifier}" --no-pager -l | sed -n '1,80p'
