@@ -28,7 +28,6 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT }}
           script_stop: true
-          insecure_ignore_fingerprint: true
           # Enviar variáveis acima para o shell remoto
           envs: REPO,REPO_URL,DEST_DIR,SERVICE_NAME
           script: |
