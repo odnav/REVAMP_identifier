@@ -5,11 +5,14 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
+    "dev": "node --watch index.js",
     "deploy": "node scripts/deploy-commands.js"
   },
   "dependencies": {
+    "@octokit/rest": "^21.0.2",
     "discord.js": "14.15.3",
     "dotenv": "16.4.5",
+    "node-ssh": "^13.1.0",
     "pg": "8.12.0"
   }
 }

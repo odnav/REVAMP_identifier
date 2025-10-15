@@ -12,6 +12,10 @@ import {
 import pkg from 'pg';
 const { Pool } = pkg;
 
+// === Deploy flow (NOVO) ===
+import * as setupDeploy from './commands/setup-deploy.js';
+import { handleInteraction as handleDeployInteraction, postInitialPanel } from './handlers/deployFlow.js';
+
 /* ===== Robustez ===== */
 process.on('unhandledRejection', e => console.error('unhandledRejection:', e));
 process.on('uncaughtException', e => console.error('uncaughtException:', e));
@@ -130,7 +134,8 @@ async function getOrCreatePublicTag(discordId){
     const r = await db.query('SELECT tag_number, is_staff_tag FROM discord_tags.user_tags WHERE discord_id=$1',[discordId]);
     if (r.rowCount) return r.rows[0];
     const { rows } = await db.query(`SELECT tag_number FROM discord_tags.user_tags WHERE tag_number >= 100 ORDER BY tag_number`);
-    let n = 100; for (const row of rows){ const t = Number(row.tag_number); if (t>n) break; if (t===n) n++; }
+    let n = 100; for (const row of rows){ const t = Number(row.tag_number); if (t>n) break; if (t===n) n++;
+    }
     await db.query(
       `INSERT INTO discord_tags.user_tags(discord_id, tag_number, is_staff_tag)
        VALUES ($1,$2,FALSE)
@@ -222,6 +227,20 @@ client.on(Events.InteractionCreate, async (i) => {
   // 🔒 Guard global: apenas admins
   if (i.guild && !isAdmin(i.member)) {
     return i.reply({ ephemeral: true, content: 'Apenas administradores podem usar estes comandos.' }).catch(()=>{});
+  }
+
+  // ======== Comando /setup-deploy (NOVO) ========
+  if (i.isChatInputCommand() && i.commandName === 'setup-deploy') {
+    return setupDeploy.execute(i);
+  }
+
+  // ======== Botões do fluxo de deploy (NOVO) ========
+  // (deixa o handler do deploy ver se é botão dele; ignora se não for)
+  if (i.isButton()) {
+    const handled = await (async () => {
+      try { await handleDeployInteraction(i); return true; } catch { return false; }
+    })();
+    if (handled) return;
   }
 
   // ----- /verificar
@@ -409,4 +428,4 @@ client.on(Events.MessageCreate, async (m) => {
   try{ await m.reply({ content:'Pré-visualização (só tu vês este aviso). Escolhe a sala e clica **Enviar**.', embeds:[embed], components:[rowSelect,rowBtns], allowedMentions:{ parse: [] } }); } catch{}
 });
 
-client.login(process.env.DISCORD_TOKEN); 
+client.login(process.env.DISCORD_TOKEN);

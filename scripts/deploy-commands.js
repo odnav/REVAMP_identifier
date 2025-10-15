@@ -1,8 +1,14 @@
+// scripts/deploy-commands.js
 import 'dotenv/config';
 import { REST, Routes, SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
 
-// --- Definição dos comandos (sem /comunicados nem /informacoes) ---
+// --- Definição dos comandos (admin-only) ---
 const raw = [
+  // Painel do fluxo de MR & Deploy
+  new SlashCommandBuilder()
+    .setName('setup-deploy')
+    .setDescription('Publica o painel de MR & Deploy nesta sala (apenas utilizadores autorizados).'),
+
   new SlashCommandBuilder()
     .setName('verificar')
     .setDescription('Verifica quem não tem tag aplicada (distingue geríveis e não geríveis).'),
@@ -27,8 +33,13 @@ const raw = [
        .setRequired(false)
     ),
 
-  new SlashCommandBuilder().setName('aplicar').setDescription('Aplica tags apenas a NÃO-staff.'),
-  new SlashCommandBuilder().setName('aplicarstaff').setDescription('Aplica tags apenas a STAFF (por segmentos).'),
+  new SlashCommandBuilder()
+    .setName('aplicar')
+    .setDescription('Aplica tags apenas a NÃO-staff.'),
+
+  new SlashCommandBuilder()
+    .setName('aplicarstaff')
+    .setDescription('Aplica tags apenas a STAFF (por segmentos).'),
 
   new SlashCommandBuilder()
     .setName('staff')
@@ -43,10 +54,10 @@ const raw = [
     .addIntegerOption(o => o.setName('numero').setDescription('Novo número da tag').setRequired(true).setMinValue(1))
     .addBooleanOption(o => o.setName('force').setDescription('Forçar <100 mesmo se não for staff').setRequired(false)),
 
-  // Fluxo interativo único
+  // Fluxo interativo único (comunicado)
   new SlashCommandBuilder()
     .setName('comunicado')
-    .setDescription('Assistente para enviar Comunicado/Informação/Custom com pré-visualização.'),
+    .setDescription('Assistente para enviar Comunicado/Informação/Custom com pré-visualização.')
 ];
 
 // 🔒 Admin-only e sem DM
@@ -57,10 +68,17 @@ const commands = raw.map(cmd =>
     .toJSON()
 );
 
-// --- Deploy ---
+// --- Deploy dos comandos ---
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-await rest.put(
-  Routes.applicationGuildCommands(process.env.DISCORD_CLIENT_ID, process.env.GUILD_ID),
-  { body: commands }
-);
-console.log('✓ Comandos registados (admins apenas)');
+
+try {
+  // Usa GUILD_ID para registo rápido a nível de guild
+  await rest.put(
+    Routes.applicationGuildCommands(process.env.DISCORD_CLIENT_ID, process.env.GUILD_ID),
+    { body: commands }
+  );
+  console.log('✅ Comandos registados (guild, admins apenas).');
+} catch (err) {
+  console.error('❌ Falha ao registar comandos:', err);
+  process.exit(1);
+}
