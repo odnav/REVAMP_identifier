@@ -157,7 +157,26 @@ async function writeVersionCfg(sha) {
 
   return runSSH(cmd);
 }
-// Lê info.json via HTTP (se INFO_JSON_URL definido) ou via SSH (ficheiro)
+
+/* ------------------------------------------------------------------
+   OPÇÃO A: leitor de info.json robusto (HTTP + BOM-safe) + deep find
+-------------------------------------------------------------------*/
+
+// procura profunda por chave em qualquer nível do objeto
+function deepFindKey(obj, key) {
+  if (obj == null || typeof obj !== 'object') return undefined;
+  if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key];
+  for (const k of Object.keys(obj)) {
+    const val = obj[k];
+    if (val && typeof val === 'object') {
+      const found = deepFindKey(val, key);
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
+}
+
+// Lê info.json via HTTP (preferido) ou via SSH (ficheiro), removendo BOM e fazendo JSON.parse manual
 async function readInfoJson() {
   if (!INFO_JSON_URL && !INFO_JSON_PATH) {
     throw new Error('Nem INFO_JSON_URL nem INFO_JSON_PATH definidos.');
@@ -170,8 +189,10 @@ async function readInfoJson() {
     try {
       const res = await fetch(INFO_JSON_URL, { signal: ctrl.signal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-      return json;
+      // leitura como texto para remover BOM antes do parse
+      const raw = await res.text();
+      const clean = raw.replace(/^\uFEFF/, '');
+      return JSON.parse(clean);
     } catch (e) {
       throw new Error(`Falha HTTP ao obter info.json: ${e.message}`);
     } finally {
@@ -183,12 +204,17 @@ async function readInfoJson() {
   const cmd = `cat ${INFO_JSON_PATH}`;
   const res = await runSSH(cmd);
   if (res.code !== 0) throw new Error(res.stderr || 'Falha ao ler info.json');
-  try { return JSON.parse(res.stdout); }
-  catch { throw new Error('Conteúdo de info.json não é JSON válido.'); }
+  try {
+    const clean = (res.stdout || '').replace(/^\uFEFF/, '');
+    return JSON.parse(clean);
+  } catch {
+    throw new Error('Conteúdo de info.json não é JSON válido.');
+  }
 }
 
 function versionMatches(json, expectSha) {
-  const v = (json?.[INFO_JSON_KEY] || '').toString();
+  const val = deepFindKey(json, INFO_JSON_KEY);
+  const v = (val ?? '').toString();
   return !!v && v.startsWith(expectSha.substring(0, 7));
 }
 
@@ -382,7 +408,8 @@ export async function handleInteraction(interaction) {
     while (Date.now() - start < INFO_JSON_POLL_TIMEOUT) {
       try {
         const json = await readInfoJson();
-        lastSeen = (json?.[INFO_JSON_KEY] || 'n/d').toString();
+        const val = deepFindKey(json, INFO_JSON_KEY);
+        lastSeen = (val ?? 'n/d').toString();
         if (versionMatches(json, expect)) { ok = true; break; }
       } catch (e) { errorMsg = e.message; }
       await new Promise(r => setTimeout(r, INFO_JSON_POLL_INTERVAL));
