@@ -142,12 +142,20 @@ async function runSSH(cmd) {
 }
 async function writeVersionCfg(sha) {
   if (!VERSION_FILE_PATH) throw new Error('VERSION_FILE_PATH não definido.');
-  const now = new Date().toISOString();
-  const content = `version=${sha}\ndate=${now}\n`;
+
+  // permite personalizar pelo .env (ex: VERSION_CFG_FORMAT="sets build_version {short}")
+  const fmt = (process.env.VERSION_CFG_FORMAT || 'sets revamp_version {sha}').trim();
+
+  // {sha} = completo, {short} = 7 chars
+  const line = fmt
+    .replaceAll('{sha}', sha)
+    .replaceAll('{short}', sha.substring(0, 7));
+
+  // escreve apenas uma linha + newline final
+  const content = `${line}\n`;
   const cmd = `printf %s ${JSON.stringify(content)} > ${VERSION_FILE_PATH}`;
   return runSSH(cmd);
 }
-
 // Lê info.json via HTTP (se INFO_JSON_URL definido) ou via SSH (ficheiro)
 async function readInfoJson() {
   if (!INFO_JSON_URL && !INFO_JSON_PATH) {
