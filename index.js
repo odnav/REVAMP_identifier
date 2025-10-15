@@ -13,8 +13,9 @@ import pkg from 'pg';
 const { Pool } = pkg;
 
 // === Deploy flow (NOVO) ===
-import * as setupDeploy from './commands/setup-deploy.js';
-import { handleInteraction as handleDeployInteraction, postInitialPanel } from './handlers/deployFlow.js';
+import * as setupDeploy from './deploy/src/commands/setup-deploy.js';
+import { handleInteraction as handleDeployInteraction } from './deploy/src/handlers/deployFlow.js';
+
 
 /* ===== Robustez ===== */
 process.on('unhandledRejection', e => console.error('unhandledRejection:', e));
