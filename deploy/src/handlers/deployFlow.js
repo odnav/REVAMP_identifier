@@ -153,7 +153,8 @@ async function writeVersionCfg(sha) {
 
   // escreve apenas uma linha + newline final
   const content = `${line}\n`;
-  const cmd = `printf %s ${JSON.stringify(content)} > ${VERSION_FILE_PATH}`;
+  const cmd = `echo "${content.replace(/"/g, '\\"')}" > ${VERSION_FILE_PATH}`;
+
   return runSSH(cmd);
 }
 // Lê info.json via HTTP (se INFO_JSON_URL definido) ou via SSH (ficheiro)
