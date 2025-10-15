@@ -23,7 +23,9 @@ const mergeMethod = (process.env.MERGE_METHOD || 'squash').toLowerCase(); // mer
 const VERSION_FILE_PATH = process.env.VERSION_FILE_PATH || (
   process.env.DEPLOY_PATH ? `${process.env.DEPLOY_PATH.replace(/\/$/, '')}/config/version.cfg` : null
 );
-const INFO_JSON_PATH          = process.env.INFO_JSON_PATH;        // e.g., /opt/fivem/server-data/info.json
+// Validação por URL (TXAdmin) OU por ficheiro no host remoto
+const INFO_JSON_URL           = process.env.INFO_JSON_URL || null;   // ex: http://192.168.1.200:30120/info.json
+const INFO_JSON_PATH          = process.env.INFO_JSON_PATH || null;  // ex: /opt/fivem/server-data/info.json
 const INFO_JSON_KEY           = process.env.INFO_JSON_KEY || 'git_sha';
 const INFO_JSON_POLL_INTERVAL = parseInt(process.env.INFO_JSON_POLL_INTERVAL_MS || '5000', 10);
 const INFO_JSON_POLL_TIMEOUT  = parseInt(process.env.INFO_JSON_POLL_TIMEOUT_MS  || '240000', 10);
@@ -131,17 +133,37 @@ async function writeVersionCfg(sha) {
   const cmd = `printf %s ${JSON.stringify(content)} > ${VERSION_FILE_PATH}`;
   return runSSH(cmd);
 }
+
+// Lê info.json via HTTP (se INFO_JSON_URL definido) ou via SSH (ficheiro)
 async function readInfoJson() {
-  if (!INFO_JSON_PATH) throw new Error('INFO_JSON_PATH não definido.');
+  if (!INFO_JSON_URL && !INFO_JSON_PATH) {
+    throw new Error('Nem INFO_JSON_URL nem INFO_JSON_PATH definidos.');
+  }
+
+  // 1) Preferir URL (TXAdmin expõe /info.json)
+  if (INFO_JSON_URL) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    try {
+      const res = await fetch(INFO_JSON_URL, { signal: ctrl.signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      return json;
+    } catch (e) {
+      throw new Error(`Falha HTTP ao obter info.json: ${e.message}`);
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  // 2) Fallback: ficheiro no host remoto via SSH
   const cmd = `cat ${INFO_JSON_PATH}`;
   const res = await runSSH(cmd);
   if (res.code !== 0) throw new Error(res.stderr || 'Falha ao ler info.json');
-  let json;
-  try { json = JSON.parse(res.stdout); } catch {
-    throw new Error('Conteúdo de info.json não é JSON válido.');
-  }
-  return json;
+  try { return JSON.parse(res.stdout); }
+  catch { throw new Error('Conteúdo de info.json não é JSON válido.'); }
 }
+
 function versionMatches(json, expectSha) {
   const v = (json?.[INFO_JSON_KEY] || '').toString();
   return !!v && v.startsWith(expectSha.substring(0, 7));
@@ -262,23 +284,24 @@ export async function handleInteraction(interaction) {
     const { expect } = unb64(interaction.customId.replace('DEPLOY_CONFIRM_RESTART_', ''));
     await interaction.deferUpdate();
 
-    if (!INFO_JSON_PATH) {
-      await logAdmin(interaction.client, `♻️ Restart confirmado, mas INFO_JSON_PATH não está definido.`);
+    if (!INFO_JSON_URL && !INFO_JSON_PATH) {
+      await logAdmin(interaction.client, `♻️ Restart confirmado, mas não há INFO_JSON_URL/INFO_JSON_PATH definidos.`);
       const flowId = Date.now().toString(36);
       return interaction.editReply({
         embeds: [
           new EmbedBuilder()
             .setTitle('Restart manual confirmado ♻️')
-            .setDescription('⚠️ Não foi possível validar info.json (caminho não configurado). Continua para validação.')
+            .setDescription('⚠️ Não foi possível validar info.json (nenhum URL/caminho configurado). Continua para validação.')
             .setColor(0xFAA81A)
         ],
         components: [validationButtons(flowId)]
       });
     }
 
+    const where = INFO_JSON_URL ? INFO_JSON_URL : INFO_JSON_PATH;
     const progress = new EmbedBuilder()
       .setTitle('A validar versão no info.json ⏳')
-      .setDescription(`A aguardar que **${INFO_JSON_KEY}** em \`${INFO_JSON_PATH}\` corresponda a \`${expect.substring(0,7)}\`…`)
+      .setDescription(`A aguardar que **${INFO_JSON_KEY}** em \`${where}\` corresponda a \`${expect.substring(0,7)}\`…`)
       .setColor(0x5865F2);
     await interaction.editReply({ embeds: [progress], components: [] });
 
@@ -295,7 +318,8 @@ export async function handleInteraction(interaction) {
 
     if (!ok) {
       const msg = `⚠️ Após o restart, o \`info.json\` **não** corresponde a \`${expect.substring(0,7)}\` (atual: \`${lastSeen}\`). ` +
-                  `Isto indica que o **pull não funcionou corretamente** ou que o servidor ainda não carregou a nova versão.`;
+                  `Isto indica que o **pull não funcionou corretamente** ou que o servidor ainda não carregou a nova versão.` +
+                  (errorMsg ? `\nDetalhe: ${errorMsg}` : '');
       try { await interaction.user.send(`🚨 ${msg}`); } catch {}
       if (notifyUserId) { try { await interaction.client.users.send(notifyUserId, `🚨 ${msg}`); } catch {} }
       await logAdmin(interaction.client, `🚨 Validação falhou (esperado ${expect.substring(0,7)}, atual ${lastSeen}).`);
@@ -308,7 +332,7 @@ export async function handleInteraction(interaction) {
       embeds: [
         new EmbedBuilder()
           .setTitle('Versão confirmada ✅')
-          .setDescription(`\`${INFO_JSON_KEY}\` em \`${INFO_JSON_PATH}\` corresponde a \`${expect.substring(0,7)}\`.`)
+          .setDescription(`\`${INFO_JSON_KEY}\` em \`${where}\` corresponde a \`${expect.substring(0,7)}\`.`)
           .setColor(0x57F287)
       ],
       components: [validationButtons(flowId)]
