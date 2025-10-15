@@ -279,9 +279,19 @@ export async function handleInteraction(interaction) {
 
     await logAdmin(interaction.client, `✅ Merge concluído PR #${pr} → SHA ${res.sha?.substring(0,7)}`);
 
-    // 3) PULL por SSH (sem restart) + escrever version.cfg com o SHA
-    const cmd = deployCommands();
-    const pullRes = await runSSH(cmd);
+    // 3) PULL por SSH (sem restart) + escrever version.cfg com o SHA — COM TRY/CATCH
+    let pullRes;
+    try {
+      const cmd = deployCommands();
+      pullRes = await runSSH(cmd);
+    } catch (e) {
+      const msg = `❌ Pull falhou (exceção de SSH): ${e?.message || e}`;
+      await logAdmin(interaction.client, `🚨 ${msg}`);
+      await interaction.editReply({ content: msg, embeds: [], components: [homeButtons()] });
+      if (notifyUserId) { try { await interaction.client.users.send(notifyUserId, `🚨 ${msg}`); } catch {} }
+      return;
+    }
+
     if (pullRes.code !== 0) {
       const msg = `❌ Pull falhou: ${pullRes.stderr || 'sem stderr'}`;
       await logAdmin(interaction.client, `🚨 ${msg}`);
