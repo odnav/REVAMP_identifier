@@ -83,16 +83,30 @@ async function ensurePullRequest() {
   return pr.data;
 }
 async function getCompare() {
-  const { data } = await octokit.repos.compareCommitsWithBasehead({
-    owner, repo, basehead: `${baseBranch}...${headBranch}`
-  });
-  return data;
+  try {
+    const { data } = await octokit.repos.compareCommitsWithBasehead({
+      owner, repo, basehead: `${baseBranch}...${headBranch}`
+    });
+    return data;
+  } catch (e) {
+    console.error('GitHub compare error:', e?.status, e?.message, e?.response?.data);
+    throw e;
+  }
 }
 async function mergePR(prNumber) {
   const { data } = await octokit.pulls.merge({
     owner, repo, pull_number: prNumber, merge_method: mergeMethod
   });
   return data; // { merged, sha, message }
+}
+
+// Há diferenças?
+function hasDiff(compareData) {
+  if (!compareData) return false;
+  if (compareData.status && compareData.status.toLowerCase() !== 'identical') return true; // ahead/behind/diverged
+  if (typeof compareData.total_commits === 'number' && compareData.total_commits > 0) return true;
+  if (Array.isArray(compareData.files) && compareData.files.length > 0) return true;
+  return false;
 }
 
 // ---------- SSH ----------
@@ -192,16 +206,42 @@ export async function handleInteraction(interaction) {
   // 1) Criar MR
   if (interaction.customId === 'DEPLOY_CREATE_MR') {
     await interaction.deferUpdate();
-    const compare = await getCompare();
+
+    let compare;
+    try {
+      compare = await getCompare();
+    } catch (e) {
+      await logAdmin(interaction.client, `❌ Falha no compare ${headBranch}...${baseBranch}: ${e?.status || ''} ${e?.message || ''}`);
+      return interaction.editReply({
+        embeds: [new EmbedBuilder()
+          .setTitle('Erro ao comparar branches')
+          .setDescription('Não foi possível obter as diferenças entre branches (verifica token/permissões e nomes dos branches).')
+          .setColor(0xED4245)],
+        components: [homeButtons()]
+      });
+    }
+
+    // proteção: sem diferenças
+    if (!hasDiff(compare)) {
+      const embNoDiff = new EmbedBuilder()
+        .setTitle(`Sem diferenças entre ${headBranch} e ${baseBranch}`)
+        .setDescription('Não há commits ou alterações de ficheiros para aplicar. ✅')
+        .setColor(0x57F287);
+      await logAdmin(interaction.client, `ℹ️ Sem diferenças (${headBranch} → ${baseBranch}). Operação cancelada.`);
+      await interaction.editReply({ embeds: [embNoDiff], components: [homeButtons()] });
+      return;
+    }
+
     const lines = compare.commits.map(c =>
       `• \`${c.sha.substring(0,7)}\` ${c.commit.message.split('\n')[0]} — _${c.commit.author?.name || 'autor'}_`
     );
     const limited = lines.slice(-20);
     const emb = new EmbedBuilder()
-      .setTitle('Commits a entrar (DEV → main)')
+      .setTitle(`Commits a entrar (${headBranch} → ${baseBranch})`)
       .setDescription(limited.length ? limited.join('\n') : 'Sem diferenças.')
       .setFooter({ text: `Total: ${compare.total_commits}` })
       .setColor(0xFAA81A);
+
     const pr = await ensurePullRequest();
     await logAdmin(interaction.client, `🧩 PR garantido/criado #${pr.number} ${headBranch} → ${baseBranch} por <@${interaction.user.id}>`);
     await interaction.editReply({ embeds: [emb], components: [confirmButtons(pr.number)] });
@@ -212,6 +252,19 @@ export async function handleInteraction(interaction) {
   if (interaction.customId.startsWith('DEPLOY_MERGE_')) {
     const { pr } = unb64(interaction.customId.replace('DEPLOY_MERGE_', ''));
     await interaction.deferUpdate();
+
+    // revalida se ainda há diferenças
+    let compareSafe;
+    try { compareSafe = await getCompare(); } catch {}
+    if (!hasDiff(compareSafe)) {
+      const embNoDiff = new EmbedBuilder()
+        .setTitle('Nada para fazer merge')
+        .setDescription(`Os branches **${headBranch}** e **${baseBranch}** estão idênticos. Operação cancelada.`)
+        .setColor(0x57F287);
+      await logAdmin(interaction.client, `ℹ️ Merge abortado: sem diferenças (${headBranch} → ${baseBranch}).`);
+      await interaction.editReply({ embeds: [embNoDiff], components: [homeButtons()] });
+      return;
+    }
 
     const res = await mergePR(pr);
     if (!res.merged) {
