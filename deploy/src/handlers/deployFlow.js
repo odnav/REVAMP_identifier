@@ -40,12 +40,74 @@ function isAllowed(interaction) {
 function isRightChannel(interaction) {
   return !deployChannelId || interaction.channelId === deployChannelId;
 }
-async function logAdmin(client, msg) {
+const groupedLogSessions = new Map();
+
+async function logAdmin(interactionOrClient, msg, options = {}) {
   if (!adminLogChannelId) return;
+
+  const interaction = interactionOrClient?.client ? interactionOrClient : null;
+  const client = interaction ? interaction.client : interactionOrClient;
+  if (!client) return;
+
+  const userMention = interaction?.user?.id ? `<@${interaction.user.id}>` : 'Utilizador desconhecido';
+
+  const defaultKey = interaction
+    ? `deploy:${interaction.user?.id || 'unknown'}:${interaction.message?.id || interaction.id}`
+    : 'global';
+  const key = options.key || defaultKey;
+  if (!key) return;
+
+  let session = groupedLogSessions.get(key);
+  if (!session) {
+    session = {
+      header: options.header || (interaction ? `Deploy ${headBranch} → ${baseBranch} • ${userMention}` : null),
+      lines: [],
+      channel: null,
+      message: null,
+      startedAt: Date.now()
+    };
+    groupedLogSessions.set(key, session);
+  } else {
+    if (options.header) session.header = options.header;
+    if (!session.header && interaction) {
+      session.header = `Deploy ${headBranch} → ${baseBranch} • ${userMention}`;
+    }
+  }
+
+  session.lines.push(msg);
+
+  const startedLine = session.startedAt
+    ? `• Iniciado: <t:${Math.floor(session.startedAt / 1000)}:f>`
+    : null;
+  const steps = session.lines.map((line, idx) => `${idx + 1}. ${line}`);
+  const contentParts = [
+    session.header ? `**${session.header}**` : null,
+    startedLine,
+    steps.join('\n')
+  ].filter(Boolean);
+  const content = contentParts.join('\n');
+
   try {
-    const ch = await client.channels.fetch(adminLogChannelId);
-    await ch.send(msg);
-  } catch {}
+    if (!session.channel) {
+      session.channel = await client.channels.fetch(adminLogChannelId);
+    }
+    if (!session.channel) return;
+
+    if (!session.message) {
+      session.message = await session.channel.send({ content });
+    } else {
+      await session.message.edit({ content });
+    }
+  } catch {
+    if (!session.channel) return;
+    try {
+      session.message = await session.channel.send({ content });
+    } catch {}
+  }
+
+  if (options.end) {
+    groupedLogSessions.delete(key);
+  }
 }
 
 // ---------- UI ----------
@@ -246,7 +308,7 @@ export async function handleInteraction(interaction) {
     try {
       compare = await getCompare();
     } catch (e) {
-      await logAdmin(interaction.client, `❌ Falha no compare ${headBranch}...${baseBranch}: ${e?.status || ''} ${e?.message || ''}`);
+      await logAdmin(interaction, `❌ Falha no compare ${headBranch}...${baseBranch}: ${e?.status || ''} ${e?.message || ''}`, { end: true });
       return interaction.editReply({
         embeds: [new EmbedBuilder()
           .setTitle('Erro ao comparar branches')
@@ -262,7 +324,7 @@ export async function handleInteraction(interaction) {
         .setTitle(`Sem diferenças entre ${headBranch} e ${baseBranch}`)
         .setDescription('Não há commits ou alterações de ficheiros para aplicar. ✅')
         .setColor(0x57F287);
-      await logAdmin(interaction.client, `ℹ️ Sem diferenças (${headBranch} → ${baseBranch}). Operação cancelada.`);
+      await logAdmin(interaction, `ℹ️ Sem diferenças (${headBranch} → ${baseBranch}). Operação cancelada.`, { end: true });
       await interaction.editReply({ embeds: [embNoDiff], components: [homeButtons()] });
       return;
     }
@@ -278,7 +340,7 @@ export async function handleInteraction(interaction) {
       .setColor(0xFAA81A);
 
     const pr = await ensurePullRequest();
-    await logAdmin(interaction.client, `🧩 PR garantido/criado #${pr.number} ${headBranch} → ${baseBranch} por <@${interaction.user.id}>`);
+    await logAdmin(interaction, `🧩 PR garantido/criado #${pr.number} ${headBranch} → ${baseBranch} por <@${interaction.user.id}>`);
     await interaction.editReply({ embeds: [emb], components: [confirmButtons(pr.number)] });
     return;
   }
@@ -296,14 +358,14 @@ export async function handleInteraction(interaction) {
         .setTitle('Nada para fazer merge')
         .setDescription(`Os branches **${headBranch}** e **${baseBranch}** estão idênticos. Operação cancelada.`)
         .setColor(0x57F287);
-      await logAdmin(interaction.client, `ℹ️ Merge abortado: sem diferenças (${headBranch} → ${baseBranch}).`);
+      await logAdmin(interaction, `ℹ️ Merge abortado: sem diferenças (${headBranch} → ${baseBranch}).`, { end: true });
       await interaction.editReply({ embeds: [embNoDiff], components: [homeButtons()] });
       return;
     }
 
     const res = await mergePR(pr);
     if (!res.merged) {
-      await logAdmin(interaction.client, `❌ Merge falhou PR #${pr}: ${res.message || 'erro'}`);
+      await logAdmin(interaction, `❌ Merge falhou PR #${pr}: ${res.message || 'erro'}`, { end: true });
       return interaction.editReply({ content: '❌ Merge não efetuado (conflitos/permissões).', embeds: [], components: [homeButtons()] });
     }
 
@@ -312,7 +374,7 @@ export async function handleInteraction(interaction) {
       .setDescription(`PR #${pr} unido. Commit final: \`${(res.sha || '').substring(0,7)}\``)
       .setColor(0x57F287);
 
-    await logAdmin(interaction.client, `✅ Merge concluído PR #${pr} → SHA ${res.sha?.substring(0,7)}`);
+    await logAdmin(interaction, `✅ Merge concluído PR #${pr} → SHA ${res.sha?.substring(0,7)}`);
 
     // 3) PULL por SSH (sem restart) + escrever version.cfg com o SHA — COM TRY/CATCH
     let pullRes;
@@ -321,7 +383,7 @@ export async function handleInteraction(interaction) {
       pullRes = await runSSH(cmd);
     } catch (e) {
       const msg = `❌ Pull falhou (exceção de SSH): ${e?.message || e}`;
-      await logAdmin(interaction.client, `🚨 ${msg}`);
+      await logAdmin(interaction, `🚨 ${msg}`, { end: true });
       await interaction.editReply({ content: msg, embeds: [], components: [homeButtons()] });
       if (notifyUserId) { try { await interaction.client.users.send(notifyUserId, `🚨 ${msg}`); } catch {} }
       return;
@@ -329,7 +391,7 @@ export async function handleInteraction(interaction) {
 
     if (pullRes.code !== 0) {
       const msg = `❌ Pull falhou: ${pullRes.stderr || 'sem stderr'}`;
-      await logAdmin(interaction.client, `🚨 ${msg}`);
+      await logAdmin(interaction, `🚨 ${msg}`, { end: true });
       await interaction.editReply({ content: msg, embeds: [], components: [homeButtons()] });
       if (notifyUserId) { try { await interaction.client.users.send(notifyUserId, `🚨 ${msg}`); } catch {} }
       return;
@@ -341,7 +403,7 @@ export async function handleInteraction(interaction) {
         const r = await writeVersionCfg(res.sha);
         if (r.code !== 0) throw new Error(r.stderr || 'erro');
         versionMsg = `✍️ version.cfg atualizado em \`${VERSION_FILE_PATH}\` com \`${res.sha.substring(0,7)}\`.`;
-        await logAdmin(interaction.client, `✍️ version.cfg escrito com ${res.sha.substring(0,7)} por <@${interaction.user.id}>`);
+        await logAdmin(interaction, `✍️ version.cfg escrito com ${res.sha.substring(0,7)} por <@${interaction.user.id}>`);
       } catch (e) {
         versionMsg = `⚠️ Falha a escrever version.cfg: ${e.message}`;
       }
@@ -367,7 +429,7 @@ export async function handleInteraction(interaction) {
         .setStyle(ButtonStyle.Danger),
     );
 
-    await logAdmin(interaction.client, `📦 Pull concluído por <@${interaction.user.id}> (SHA ${res.sha.substring(0,7)})`);
+    await logAdmin(interaction, `📦 Pull concluído por <@${interaction.user.id}> (SHA ${res.sha.substring(0,7)})`);
     await interaction.editReply({ embeds: [emb, emb2], components: [row] });
     return;
   }
@@ -383,7 +445,7 @@ export async function handleInteraction(interaction) {
     await interaction.deferUpdate();
 
     if (!INFO_JSON_URL && !INFO_JSON_PATH) {
-      await logAdmin(interaction.client, `♻️ Restart confirmado, mas não há INFO_JSON_URL/INFO_JSON_PATH definidos.`);
+      await logAdmin(interaction, `♻️ Restart confirmado, mas não há INFO_JSON_URL/INFO_JSON_PATH definidos.`);
       const flowId = Date.now().toString(36);
       return interaction.editReply({
         embeds: [
@@ -421,12 +483,12 @@ export async function handleInteraction(interaction) {
                   (errorMsg ? `\nDetalhe: ${errorMsg}` : '');
       try { await interaction.user.send(`🚨 ${msg}`); } catch {}
       if (notifyUserId) { try { await interaction.client.users.send(notifyUserId, `🚨 ${msg}`); } catch {} }
-      await logAdmin(interaction.client, `🚨 Validação falhou (esperado ${expect.substring(0,7)}, atual ${lastSeen}).`);
+      await logAdmin(interaction, `🚨 Validação falhou (esperado ${expect.substring(0,7)}, atual ${lastSeen}).`, { end: true });
       return interaction.editReply({ content: msg, embeds: [], components: [homeButtons()] });
     }
 
     const flowId = Date.now().toString(36);
-    await logAdmin(interaction.client, `✅ info.json OK para ${expect.substring(0,7)} após restart.`);
+    await logAdmin(interaction, `✅ info.json OK para ${expect.substring(0,7)} após restart.`);
     return interaction.editReply({
       embeds: [
         new EmbedBuilder()
@@ -440,12 +502,12 @@ export async function handleInteraction(interaction) {
 
   // 5) Validação
   if (interaction.customId.startsWith('DEPLOY_VALID_OK_')) {
-    await logAdmin(interaction.client, `✅ Validação OK por <@${interaction.user.id}>`);
+    await logAdmin(interaction, `✅ Validação OK por <@${interaction.user.id}>`, { end: true });
     await interaction.update({ content: '✅ Validado! Painel pronto para novo ciclo.', embeds: [], components: [homeButtons()] });
     return;
   }
   if (interaction.customId.startsWith('DEPLOY_VALID_FAIL_')) {
-    await logAdmin(interaction.client, `❌ Validação FALHOU por <@${interaction.user.id}>`);
+    await logAdmin(interaction, `❌ Validação FALHOU por <@${interaction.user.id}>`, { end: true });
     if (notifyUserId) { try { await interaction.client.users.send(notifyUserId, '🚨 A validação do deploy foi marcada como **FALHOU**.'); } catch {} }
     await interaction.update({ content: '❌ Validação marcou falha. Responsável notificado.', embeds: [], components: [homeButtons()] });
     return;
