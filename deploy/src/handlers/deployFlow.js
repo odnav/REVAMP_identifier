@@ -80,12 +80,15 @@ async function logAdmin(interactionOrClient, msg, options = {}) {
     ? `• Iniciado: <t:${Math.floor(session.startedAt / 1000)}:f>`
     : null;
   const steps = session.lines.map((line, idx) => `${idx + 1}. ${line}`);
-  const contentParts = [
+  const descriptionParts = [
     session.header ? `**${session.header}**` : null,
     startedLine,
-    steps.join('\n')
+    steps.length ? steps.join('\n') : null
   ].filter(Boolean);
-  const content = contentParts.join('\n');
+
+  const embed = new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setDescription(descriptionParts.join('\n') || '—');
 
   try {
     if (!session.channel) {
@@ -94,14 +97,14 @@ async function logAdmin(interactionOrClient, msg, options = {}) {
     if (!session.channel) return;
 
     if (!session.message) {
-      session.message = await session.channel.send({ content });
+      session.message = await session.channel.send({ embeds: [embed] });
     } else {
-      await session.message.edit({ content });
+      await session.message.edit({ embeds: [embed] });
     }
   } catch {
     if (!session.channel) return;
     try {
-      session.message = await session.channel.send({ content });
+      session.message = await session.channel.send({ embeds: [embed] });
     } catch {}
   }
 
