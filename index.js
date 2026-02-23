@@ -38,6 +38,7 @@ const GUILD_ID = process.env.GUILD_ID;
 const BRACKETS_SQUARE = process.env.NICKNAME_PREFIX_BRACKETS !== '0';
 // (opcional) Roles que também contam como administradores
 const ADMIN_ROLE_IDS = (process.env.ADMIN_ROLE_IDS || '').split(',').map(s=>s.trim()).filter(Boolean);
+const ALLOWED_USER_IDS = (process.env.ALLOWED_USER_IDS || '').split(',').map(s=>s.trim()).filter(Boolean);
 
 /* ===== Utils ===== */
 function parseRange(s) {
@@ -69,6 +70,9 @@ async function withConn(fn){ const c = await pool.connect(); try { return await 
 function isAdmin(member){
   return member?.permissions?.has(PermissionsBitField.Flags.Administrator) ||
          member?.roles?.cache?.some(r => ADMIN_ROLE_IDS.includes(r.id));
+}
+function isDeployAllowed(userId){
+  return ALLOWED_USER_IDS.includes(userId);
 }
 
 // BBCode simples -> Markdown (para comodidade ao escrever textos)
@@ -225,8 +229,12 @@ client.on(Events.GuildMemberAdd, async (member) => {
 client.on(Events.InteractionCreate, async (i) => {
   if (!i.isChatInputCommand() && !i.isButton() && !i.isChannelSelectMenu() && !i.isModalSubmit()) return;
 
-  // 🔒 Guard global: apenas admins
-  if (i.guild && !isAdmin(i.member)) {
+  const isDeployInteraction =
+    (i.isChatInputCommand() && i.commandName === 'setup-deploy') ||
+    (i.isButton() && i.customId?.startsWith('DEPLOY_'));
+
+  // 🔒 Guard global: admins para comandos gerais; deploy aceita IDs do .env
+  if (i.guild && !isAdmin(i.member) && !(isDeployInteraction && isDeployAllowed(i.user.id))) {
     return i.reply({ ephemeral: true, content: 'Apenas administradores podem usar estes comandos.' }).catch(()=>{});
   }
 
